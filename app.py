@@ -8,7 +8,7 @@ import io
 st.set_page_config(page_title="Stencil Técnico Pro", page_icon="🖊️", layout="wide")
 
 st.title("🖊️ Stencil Técnico Avançado - Linha Vermelha")
-st.write("Converta fotos em estêncil técnico de alta fidelidade com mapeamento de sombras em linhas descontínuas.")
+st.write("Converta fotos em estêncil técnico de alta fidelidade com separação estrita: Contornos Sólidos e Sombras Tracejadas.")
 
 # --- BARRA LATERAL (AJUSTES) ---
 st.sidebar.header("🛠️ Ajustes do Mapeamento Técnico")
@@ -22,16 +22,16 @@ t1 = st.sidebar.slider("Zona 1: Áreas Muito Escuras (Preto)", 10, 80, 45)
 t2 = st.sidebar.slider("Zona 2: Tons Escuros / Médios", 81, 150, 100)
 t3 = st.sidebar.slider("Zona 3: Tons Claros (Transições)", 151, 230, 175)
 
-# --- MOTOR DE PROCESSAMENTO ---
+# --- MOTOR DE PROCESSAMENTO CORRIGIDO ---
 def gerar_stencil_tecnico(img, sens_canny, thresh1, thresh2, thresh3):
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
     
-    # 1. CONTORNO PRINCIPAL (Linha Sólida Fina)
+    # 1. CONTORNO PRINCIPAL (Linha Sólida Fina e Contínua)
     blurred_main = cv2.GaussianBlur(gray, (3, 3), 0)
     main_edges = cv2.Canny(blurred_main, sens_canny, sens_canny * 2)
     
-    # 2. MAPEAMENTO DE SOMBRAS (Linhas Descontínuas)
-    blurred_shadows = cv2.GaussianBlur(gray, (9, 9), 0)
+    # 2. MAPEAMENTO DE SOMBRAS
+    blurred_shadows = cv2.GaussianBlur(gray, (7, 7), 0)
     
     mask1 = (blurred_shadows < thresh1).astype(np.uint8) * 255
     mask2 = (blurred_shadows < thresh2).astype(np.uint8) * 255
@@ -43,13 +43,21 @@ def gerar_stencil_tecnico(img, sens_canny, thresh1, thresh2, thresh3):
     
     shadow_edges = cv2.bitwise_or(cv2.bitwise_or(edges1, edges2), edges3)
     
-    # Máscara geométrica para criar o efeito tracejado/pontilhado nas sombras
+    # === O TRUQUE DA EXCLUSÃO ===
+    # Remove estritamente qualquer linha de sombra que coincida com o contorno principal.
+    # Isso garante que o contorno principal NUNCA fique tracejado ou poluído.
+    shadow_edges_pure = cv2.bitwise_and(shadow_edges, cv2.bitwise_not(main_edges))
+    
+    # Criar máscara geométrica para o efeito tracejado (linhas descontínuas)
     h, w = gray.shape
     y_indices, x_indices = np.indices((h, w))
-    dash_mask = (((x_indices + y_indices) % 12) < 7).astype(np.uint8) * 255
-    dashed_shadows = cv2.bitwise_and(shadow_edges, dash_mask)
+    dash_mask = (((x_indices + y_indices) % 12) < 6).astype(np.uint8) * 255
     
-    # Junção total (Contorno Sólido + Sombras Tracejadas)
+    # O tracejado é aplicado APENAS nas sombras puras isoladas
+    dashed_shadows = cv2.bitwise_and(shadow_edges_pure, dash_mask)
+    
+    # 3. JUNÇÃO FINAL COMPATÍVEL
+    # Linhas Principais (Sólidas) + Sombras Mapeadas (Tracejadas)
     final_edges = cv2.bitwise_or(main_edges, dashed_shadows)
     
     # Mapeamento de cor: Fundo Branco limpo, Linhas Vermelhas puras
@@ -84,7 +92,7 @@ if imagem_subida is not None:
     with c1:
         st.image(img_display_orig, caption="Sua Referência Original", use_container_width=True)
     with c2:
-        st.image(resultado, caption="Resultado: Mapa Técnico Vermelho", use_container_width=True)
+        st.image(resultado, caption="Resultado: Mapa Técnico Vermelho Puro", use_container_width=True)
             
     # Conversão correta de cores para o download final
     resultado_bgr = cv2.cvtColor(resultado, cv2.COLOR_RGB2BGR)

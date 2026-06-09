@@ -112,3 +112,4 @@ if imagem_subida is not None:
         data=io_buf,
         file_name="stencil_tecnico_limpo.jpg",
         mime="image/jpeg"
+    )

@@ -5,48 +5,65 @@ from PIL import Image
 import io
 
 # --- CONFIGURAÇÃO DA PÁGINA ---
-st.set_page_config(page_title="Stencil Técnico Pro", page_icon="🖊️", layout="wide")
+st.set_page_config(page_title="Stencil Pro - Hierarquia", page_icon="🖊️", layout="wide")
 
-st.title("🖊️ Stencil Técnico Avançado")
-st.write("Estêncil com controle de espessura, distanciamento e opção de cor (Vermelho/Preto).")
+st.title("🖊️ Stencil Técnico: Hierarquia de Linhas")
+st.write("Estêncil com Contornos Externos, Detalhes Finos e Fusão Antiborrão para Minimalismo.")
 
 # --- BARRA LATERAL (AJUSTES PRINCIPAIS) ---
 st.sidebar.header("🎨 Estilo do Estêncil")
 cor_stencil = st.sidebar.radio("Cor da Linha:", ["Vermelho", "Preto"])
 
-st.sidebar.header("🛠️ Controles Principais")
-sensibilidade_contorno = st.sidebar.slider("Sensibilidade do Contorno", 10, 150, 50, help="Menor valor pega mais detalhes internos.")
+st.sidebar.header("🛠️ Controles de Traço")
+sensibilidade_contorno = st.sidebar.slider("Sensibilidade dos Detalhes", 10, 150, 40, help="Controla a quantidade de detalhes finos internos.")
+espessura_silhueta = st.sidebar.slider("Espessura dos Contornos Principais", 1, 5, 2, help="Deixa as formas principais mais grossas.")
 
-# NOVO: Controle de Espessura
-espessura_linha = st.sidebar.slider("Espessura da Linha Principal", 1, 5, 1, help="1 é o mais fino, 5 é o mais grosso. Afeta apenas o traço contínuo.")
+# NOVO: Controle de Fusão para Linhas Duplas
+st.sidebar.markdown("---")
+st.sidebar.markdown("**🛡️ Limpeza de Traço:**")
+fusao_linhas = st.sidebar.slider("Fusão (Evitar Linha Dupla)", 1, 9, 3, help="Derrete linhas duplas paralelas transformando-as em um traço único. Aumente para desenhos minimalistas.")
+distancia_sombras = st.sidebar.slider("Distância Segura (Tracejado)", 1, 9, 5, help="Afasta as sombras das linhas contínuas.")
 
-# MANTIDO: Controle de Distância
-distancia_sombras = st.sidebar.slider("Distância Segura (Evita Linha Dupla)", 1, 9, 5, help="Afasta o tracejado da linha principal.")
-
-# --- BARRA LATERAL (AJUSTES AVANÇADOS ESCONDIDOS) ---
-# Isso limpa a interface. O usuário só abre se precisar!
+# --- BARRA LATERAL (AJUSTES AVANÇADOS DE SOMBRA) ---
 with st.sidebar.expander("⚙️ Ajustes Avançados de Sombra"):
-    st.caption("Ajuste fino de onde começam e terminam as sombras.")
+    st.caption("Ajuste as 4 zonas tonais.")
     t1 = st.slider("Zona 1: Áreas Muito Escuras", 10, 80, 45)
     t2 = st.slider("Zona 2: Tons Escuros / Médios", 81, 150, 100)
     t3 = st.slider("Zona 3: Tons Claros (Transições)", 151, 230, 175)
 
-# --- MOTOR DE PROCESSAMENTO ---
-def gerar_stencil_tecnico(img, sens_canny, thresh1, thresh2, thresh3, dist, espessura, cor):
+# --- MOTOR DE PROCESSAMENTO (HIERARQUIA) ---
+def gerar_stencil_hierarquia(img, sens_canny, thresh1, thresh2, thresh3, dist, espessura, fusao, cor):
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
     
-    # 1. CONTORNO PRINCIPAL (Linha Sólida)
-    blurred_main = cv2.GaussianBlur(gray, (3, 3), 0)
-    main_edges = cv2.Canny(blurred_main, sens_canny, sens_canny * 2)
+    # 1. CONTORNOS PRINCIPAIS (Formas Maiores)
+    blur_major = cv2.GaussianBlur(gray, (5, 5), 0)
+    major_edges = cv2.Canny(blur_major, sens_canny * 1.5, sens_canny * 3)
     
-    # APLICAR ESPESSURA NA LINHA PRINCIPAL
     if espessura > 1:
-        kernel_espessura = np.ones((espessura, espessura), np.uint8)
-        main_edges = cv2.dilate(main_edges, kernel_espessura, iterations=1)
+        kernel_bold = np.ones((espessura, espessura), np.uint8)
+        major_edges_bold = cv2.dilate(major_edges, kernel_bold, iterations=1)
+    else:
+        major_edges_bold = major_edges
     
-    # 2. MAPEAMENTO DE SOMBRAS
+    # 2. DETALHES INTERNOS (Linha Fina)
+    blur_detail = cv2.GaussianBlur(gray, (3, 3), 0)
+    all_edges = cv2.Canny(blur_detail, sens_canny, sens_canny * 2)
+    
+    # Subtração para ficar só com detalhes
+    kernel_sub = np.ones((espessura + 2, espessura + 2), np.uint8)
+    major_dilated_for_sub = cv2.dilate(major_edges, kernel_sub, iterations=1)
+    detail_edges = cv2.bitwise_and(all_edges, cv2.bitwise_not(major_dilated_for_sub))
+    
+    # 3. COMBINAÇÃO DE TRAÇOS E FUSÃO (O SEGREDO DA LINHA DUPLA)
+    combined_solid = cv2.bitwise_or(major_edges_bold, detail_edges)
+    
+    # Se o usuário ativou a fusão, aplicamos o Morphological Close
+    if fusao > 1:
+        kernel_close = np.ones((fusao, fusao), np.uint8)
+        combined_solid = cv2.morphologyEx(combined_solid, cv2.MORPH_CLOSE, kernel_close)
+    
+    # 4. MAPEAMENTO DE SOMBRAS (Tracejado)
     blurred_shadows = cv2.GaussianBlur(gray, (7, 7), 0)
-    
     mask1 = (blurred_shadows < thresh1).astype(np.uint8) * 255
     mask2 = (blurred_shadows < thresh2).astype(np.uint8) * 255
     mask3 = (blurred_shadows < thresh3).astype(np.uint8) * 255
@@ -54,37 +71,34 @@ def gerar_stencil_tecnico(img, sens_canny, thresh1, thresh2, thresh3, dist, espe
     edges1 = cv2.Canny(mask1, 100, 200)
     edges2 = cv2.Canny(mask2, 100, 200)
     edges3 = cv2.Canny(mask3, 100, 200)
-    
     shadow_edges = cv2.bitwise_or(cv2.bitwise_or(edges1, edges2), edges3)
     
-    # ZONA DE EXCLUSÃO (CAMPO DE FORÇA)
+    # ZONA DE EXCLUSÃO (Campo de Força)
     kernel_dist = np.ones((dist, dist), np.uint8)
-    main_edges_dilated = cv2.dilate(main_edges, kernel_dist, iterations=1)
+    combined_dilated = cv2.dilate(combined_solid, kernel_dist, iterations=1)
     
-    shadow_edges_pure = cv2.bitwise_and(shadow_edges, cv2.bitwise_not(main_edges_dilated))
+    shadow_edges_pure = cv2.bitwise_and(shadow_edges, cv2.bitwise_not(combined_dilated))
     
     # EFEITO TRACEJADO
     h, w = gray.shape
     y_indices, x_indices = np.indices((h, w))
     dash_mask = (((x_indices + y_indices) % 12) < 6).astype(np.uint8) * 255
-    
     dashed_shadows = cv2.bitwise_and(shadow_edges_pure, dash_mask)
     
-    # 3. JUNÇÃO FINAL
-    final_edges = cv2.bitwise_or(main_edges, dashed_shadows)
+    # 5. JUNÇÃO FINAL
+    final_edges = cv2.bitwise_or(combined_solid, dashed_shadows)
     
-    # 4. APLICAÇÃO DA COR ESCOLHIDA
+    # 6. APLICAÇÃO DA COR
     output_rgb = np.full((h, w, 3), 255, dtype=np.uint8)
-    
     if cor == "Vermelho":
-        output_rgb[final_edges > 0] = [255, 0, 0] # Vermelho
+        output_rgb[final_edges > 0] = [255, 0, 0]
     else:
-        output_rgb[final_edges > 0] = [0, 0, 0]   # Preto absoluto
+        output_rgb[final_edges > 0] = [0, 0, 0]
         
     return output_rgb
 
-# --- INTERFACE FLUXO DO USUÁRIO ---
-tab1, tab2 = st.tabs(["📷 Câmera do Dispositivo", "📂 Abrir da Galeria"])
+# --- INTERFACE ---
+tab1, tab2 = st.tabs(["📷 Câmera", "📂 Galeria"])
 imagem_subida = None
 
 with tab1:
@@ -93,7 +107,7 @@ with tab1:
         imagem_subida = camera_pic
 
 with tab2:
-    arquivo_pic = st.file_uploader("Selecione um arquivo de imagem", type=['jpg', 'jpeg', 'png'])
+    arquivo_pic = st.file_uploader("Selecione um arquivo (JPG/PNG)", type=['jpg', 'jpeg', 'png'])
     if arquivo_pic:
         imagem_subida = arquivo_pic
 
@@ -101,10 +115,9 @@ if imagem_subida is not None:
     file_bytes = np.asarray(bytearray(imagem_subida.read()), dtype=np.uint8)
     img_opencv = cv2.imdecode(file_bytes, 1)
     
-    # Executa o processamento com as novas opções
-    resultado = gerar_stencil_tecnico(
+    resultado = gerar_stencil_hierarquia(
         img_opencv, sensibilidade_contorno, t1, t2, t3, 
-        distancia_sombras, espessura_linha, cor_stencil
+        distancia_sombras, espessura_silhueta, fusao_linhas, cor_stencil
     )
     
     img_display_orig = cv2.cvtColor(img_opencv, cv2.COLOR_BGR2RGB)
@@ -112,19 +125,18 @@ if imagem_subida is not None:
     st.write("---")
     c1, c2 = st.columns(2)
     with c1:
-        st.image(img_display_orig, caption="Sua Referência Original", use_container_width=True)
+        st.image(img_display_orig, caption="Original", use_container_width=True)
     with c2:
-        st.image(resultado, caption=f"Resultado: Mapa Técnico {cor_stencil}", use_container_width=True)
+        st.image(resultado, caption=f"Hierarquia {cor_stencil}", use_container_width=True)
             
-    # Conversão correta de cores para o download final
     resultado_bgr = cv2.cvtColor(resultado, cv2.COLOR_RGB2BGR)
     _, buffer = cv2.imencode(".jpg", resultado_bgr)
     io_buf = io.BytesIO(buffer)
     
-    st.success("Seu estêncil técnico foi gerado com sucesso!")
+    st.success("Estêncil com Hierarquia gerado!")
     st.download_button(
         label=f"⬇️ Baixar Estêncil {cor_stencil}",
         data=io_buf,
-        file_name=f"stencil_{cor_stencil.lower()}.jpg",
+        file_name=f"stencil_hierarquia_{cor_stencil.lower()}.jpg",
         mime="image/jpeg"
     )

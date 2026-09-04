@@ -25,6 +25,7 @@ sensibilidade_contorno = 40
 espessura_silhueta = 1
 distancia_sombras = 5
 limpeza_fundo = 4
+espessura_minimalista = 1
 t1, t2, t3 = 45, 100, 175
 
 # --- CONTROLES DINÂMICOS (Muda conforme o tipo) ---
@@ -41,11 +42,13 @@ if "Fotografia" in tipo_referencia:
         t3 = st.slider("Zona 3: Tons Claros (Transições)", 151, 230, 175)
 else:
     st.sidebar.header("🛠️ Controles de Desenho")
-    st.sidebar.info("Modo Minimalista ativo. O sistema vai extrair o centro exato dos traços para garantir uma linha simples de 1 pixel, sem duplicações.")
-    limpeza_fundo = st.sidebar.slider("Limpeza do Fundo", 2, 15, 4, help="Aumente se o papel original da foto estiver muito sujo ou amassado.")
+    st.sidebar.info("Modo Minimalista ativo. O sistema extrai o centro dos traços para uma linha simples e sem duplicações.")
+    limpeza_fundo = st.sidebar.slider("Limpeza do Fundo", 2, 15, 4, help="Aumente se o papel original da foto estiver muito sujo.")
+    # NOVO: Controle de Espessura do Esqueleto
+    espessura_minimalista = st.sidebar.slider("Espessura da Linha", 1, 4, 1, help="Engrossa a linha única extraída. Nível 1 é o mais fino, nível 4 é o mais grosso para impressoras térmicas.")
 
 # --- MOTOR DE PROCESSAMENTO ---
-def gerar_stencil(img, tipo_ref, cor, sens, espessura, dist, lim, t1, t2, t3):
+def gerar_stencil(img, tipo_ref, cor, sens, esp_foto, dist, lim, esp_min, t1, t2, t3):
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
     h, w = gray.shape
     
@@ -54,8 +57,8 @@ def gerar_stencil(img, tipo_ref, cor, sens, espessura, dist, lim, t1, t2, t3):
         blur_major = cv2.GaussianBlur(gray, (5, 5), 0)
         major_edges = cv2.Canny(blur_major, sens * 1.5, sens * 3)
         
-        if espessura > 1:
-            kernel_bold = np.ones((espessura, espessura), np.uint8)
+        if esp_foto > 1:
+            kernel_bold = np.ones((esp_foto, esp_foto), np.uint8)
             major_edges_bold = cv2.dilate(major_edges, kernel_bold, iterations=1)
         else:
             major_edges_bold = major_edges
@@ -63,7 +66,7 @@ def gerar_stencil(img, tipo_ref, cor, sens, espessura, dist, lim, t1, t2, t3):
         blur_detail = cv2.GaussianBlur(gray, (3, 3), 0)
         all_edges = cv2.Canny(blur_detail, sens, sens * 2)
         
-        kernel_sub = np.ones((espessura + 2, espessura + 2), np.uint8)
+        kernel_sub = np.ones((esp_foto + 2, esp_foto + 2), np.uint8)
         major_dilated_for_sub = cv2.dilate(major_edges, kernel_sub, iterations=1)
         detail_edges = cv2.bitwise_and(all_edges, cv2.bitwise_not(major_dilated_for_sub))
         
@@ -93,10 +96,8 @@ def gerar_stencil(img, tipo_ref, cor, sens, espessura, dist, lim, t1, t2, t3):
     else:
         # MOTOR 2: ESQUELETIZAÇÃO (Para Desenhos e Minimalismo)
         blur = cv2.GaussianBlur(gray, (3, 3), 0)
-        # Isola perfeitamente os traços pretos (Adaptive Threshold)
         bin_img = cv2.adaptiveThreshold(blur, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY_INV, 11, lim)
         
-        # Algoritmo de Esqueletização (Afina as linhas até sobrar 1 pixel no centro)
         skel = np.zeros(bin_img.shape, np.uint8)
         element = cv2.getStructuringElement(cv2.MORPH_CROSS, (3,3))
         temp_img = bin_img.copy()
@@ -110,6 +111,11 @@ def gerar_stencil(img, tipo_ref, cor, sens, espessura, dist, lim, t1, t2, t3):
             if cv2.countNonZero(temp_img) == 0:
                 break
                 
+        # APLICA A NOVA ESPESSURA NO DESENHO MINIMALISTA
+        if esp_min > 1:
+            kernel_min = np.ones((esp_min, esp_min), np.uint8)
+            skel = cv2.dilate(skel, kernel_min, iterations=1)
+            
         final_edges = skel
         
     # Mapeamento de Cor
@@ -142,7 +148,7 @@ if imagem_subida is not None:
     resultado = gerar_stencil(
         img_opencv, tipo_referencia, cor_stencil, 
         sensibilidade_contorno, espessura_silhueta, distancia_sombras, limpeza_fundo,
-        t1, t2, t3
+        espessura_minimalista, t1, t2, t3
     )
     
     img_display_orig = cv2.cvtColor(img_opencv, cv2.COLOR_BGR2RGB)

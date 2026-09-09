@@ -8,13 +8,13 @@ import io
 st.set_page_config(page_title="Stencil Pro - Studio", page_icon="🖊️", layout="wide")
 
 st.title("🖊️ Stencil Técnico: Realismo & Flash Art")
-st.write("Modo 1: Fotografia Realista | Modo 2: Desenho/Flash (Traços 100% Sólidos e Nítidos).")
+st.write("Modo 1: Fotografia Realista | Modo 2: Flash (Extração Adaptativa - Converte Sombras em Pontos/Linhas).")
 
 # --- BARRA LATERAL (AJUSTES PRINCIPAIS) ---
 st.sidebar.header("🎯 Tipo de Referência")
 tipo_referencia = st.sidebar.radio(
     "O que você está convertendo?", 
-    ["1. Fotografia (Realismo / Rostos)", "2. Desenho / Flash (Linhas Sólidas)"]
+    ["1. Fotografia (Realismo / Rostos)", "2. Desenho / Flash (Sombras em Linhas/Pontos)"]
 )
 
 st.sidebar.header("🎨 Cor da Linha")
@@ -24,8 +24,9 @@ cor_stencil = st.sidebar.radio("Escolha a cor para impressão:", ["Roxo Hectogr�
 sensibilidade_contorno = 40
 espessura_silhueta = 2
 distancia_sombras = 5
-limite_branco = 180
-espessura_linha = 2
+tamanho_bloco = 11
+sensibilidade_fundo = 7
+espessura_linha = 1
 t1, t2, t3 = 45, 100, 175
 
 # --- CONTROLES DINÂMICOS ---
@@ -42,20 +43,25 @@ if "Fotografia" in tipo_referencia:
         t3 = st.slider("Zona 3: Tons Claros (Transições)", 151, 230, 175)
 else:
     st.sidebar.header("🛠️ Controles de Desenho")
-    st.sidebar.info("Modo Traço Sólido: Elimina manchas translúcidas e converte todos os detalhes em linhas sólidas 100% (ideal para impressora térmica).")
+    st.sidebar.info("O Motor Adaptativo transforma sombras e degradês em pontilhismos e linhas isoladas, evitando manchas na impressora térmica.")
     
-    limite_branco = st.sidebar.slider(
-        "Corte de Sombras (Threshold)", 50, 250, 180, 
-        help="Aumente para transformar sombras claras em linhas. Diminua para limpar o fundo."
+    tamanho_bloco = st.sidebar.slider(
+        "Tamanho do Detalhe (Block Size)", 3, 31, 11, step=2,
+        help="Valores baixos captam micro-pontilhismos. Valores altos captam linhas mais grossas e contornos."
+    )
+    
+    sensibilidade_fundo = st.sidebar.slider(
+        "Limpeza de Fundo", 2, 25, 7, 
+        help="Aumente para limpar o fundo branco e remover sujeiras. Diminua se o desenho estiver sumindo."
     )
     
     espessura_linha = st.sidebar.slider(
-        "Espessura do Traço", 1, 3, 2,
-        help="1 = Afinar traços, 2 = Original, 3 = Engrossar traços."
+        "Espessura Final", 1, 3, 1,
+        help="1 = Traço Original Perfeito, 2 = Levemente Engrossado."
     )
 
 # --- MOTOR DE PROCESSAMENTO ---
-def gerar_stencil(img, tipo_ref, cor, sens, esp_silhueta, dist, lim_branco, esp_linha, t1, t2, t3):
+def gerar_stencil(img, tipo_ref, cor, sens, esp_silhueta, dist, block_size, sens_fundo, esp_linha, t1, t2, t3):
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
     h, w = gray.shape
     
@@ -100,21 +106,27 @@ def gerar_stencil(img, tipo_ref, cor, sens, esp_silhueta, dist, lim_branco, esp_
         final_edges = cv2.bitwise_or(combined_solid, dashed_shadows)
         
     else:
-        # MOTOR 2: TRAÇO SÓLIDO E NÍTIDO (Sem Manchas)
+        # MOTOR 2: ADAPTATIVO (Transforma Sombra em Hachura/Pontilhismo)
         
-        # 1. Máscara de Nitidez (Sharpening): Faz as hachuras e pontos saltarem do papel
-        blur = cv2.GaussianBlur(gray, (0, 0), 2.0)
-        gray_sharp = cv2.addWeighted(gray, 1.7, blur, -0.7, 0)
+        # Garante que o block_size é ímpar (regra matemática do OpenCV)
+        if block_size % 2 == 0:
+            block_size += 1
+            
+        # O Limiar Adaptativo olha pequenas regiões e converte degradês em pontos/linhas
+        binary = cv2.adaptiveThreshold(
+            gray, 255, 
+            cv2.ADAPTIVE_THRESH_GAUSSIAN_C, 
+            cv2.THRESH_BINARY, 
+            block_size, 
+            sens_fundo
+        )
         
-        # 2. Binarização Absoluta: Transforma tudo em 100% tinta ou 100% fundo branco
-        _, ink_mask = cv2.threshold(gray_sharp, lim_branco, 255, cv2.THRESH_BINARY_INV)
+        # Inverte para que as linhas sejam "ativas" (branco no fundo preto para a máscara)
+        ink_mask = cv2.bitwise_not(binary)
         
-        # 3. Controle de Espessura
-        if esp_linha == 1:
-            kernel = np.ones((2, 2), np.uint8)
-            ink_mask = cv2.erode(ink_mask, kernel, iterations=1)
-        elif esp_linha == 3:
-            kernel = np.ones((2, 2), np.uint8)
+        # Opcional: Engrossar levemente os pontilhismos e traços finos para a impressora
+        if esp_linha > 1:
+            kernel = np.ones((esp_linha, esp_linha), np.uint8)
             ink_mask = cv2.dilate(ink_mask, kernel, iterations=1)
             
         final_edges = ink_mask
@@ -149,7 +161,7 @@ if imagem_subida is not None:
     resultado = gerar_stencil(
         img_opencv, tipo_referencia, cor_stencil, 
         sensibilidade_contorno, espessura_silhueta, distancia_sombras, 
-        limite_branco, espessura_linha, t1, t2, t3
+        tamanho_bloco, sensibilidade_fundo, espessura_linha, t1, t2, t3
     )
     
     img_display_orig = cv2.cvtColor(img_opencv, cv2.COLOR_BGR2RGB)

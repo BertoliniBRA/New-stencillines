@@ -8,13 +8,13 @@ import io
 st.set_page_config(page_title="Stencil Pro - Studio", page_icon="🖊️", layout="wide")
 
 st.title("🖊️ Stencil Técnico: Realismo & Flash Art")
-st.write("Modo 1: Fotografia Realista | Modo 2: Flash Art (Com Filtro de Detalhes e Espessura).")
+st.write("Modo 1: Fotografia Realista | Modo 2: Desenho/Flash (Tons Suaves e Delicados).")
 
 # --- BARRA LATERAL (AJUSTES PRINCIPAIS) ---
 st.sidebar.header("🎯 Tipo de Referência")
 tipo_referencia = st.sidebar.radio(
     "O que você está convertendo?", 
-    ["1. Fotografia (Realismo / Rostos)", "2. Desenho / Flash (Controle Total)"]
+    ["1. Fotografia (Realismo / Rostos)", "2. Desenho / Flash (Sombras Delicadas)"]
 )
 
 st.sidebar.header("🎨 Cor da Linha")
@@ -24,9 +24,8 @@ cor_stencil = st.sidebar.radio("Escolha a cor para impressão:", ["Roxo Hectogr�
 sensibilidade_contorno = 40
 espessura_silhueta = 2
 distancia_sombras = 5
-limite_branco = 180
-espessura_linha_unica = 2
-nivel_detalhes = 0
+limite_branco = 200
+ajuste_contraste = 1.0
 t1, t2, t3 = 45, 100, 175
 
 # --- CONTROLES DINÂMICOS ---
@@ -43,29 +42,25 @@ if "Fotografia" in tipo_referencia:
         t3 = st.slider("Zona 3: Tons Claros (Transições)", 151, 230, 175)
 else:
     st.sidebar.header("🛠️ Controles de Desenho")
-    st.sidebar.info("Ajuste a espessura do traço e filtre a quantidade de microdetalhes do desenho.")
+    st.sidebar.info("Modo Translúcido: Preserva perfeitamente a delicadeza de hachuras, pontilhismos e sombras originais.")
     
-    limite_branco = st.sidebar.slider("Limpeza de Fundo", 50, 250, 180, help="Tudo mais claro que esse valor vira fundo branco.")
-    
-    # NOVO: Controle de Espessura Flexível
-    espessura_linha_unica = st.sidebar.slider(
-        "Espessura do Traço", 1, 4, 2, 
-        help="1 = Mais Fino (Erosão), 2 = Traço Original, 3 = Grosso, 4 = Muito Grosso."
+    limite_branco = st.sidebar.slider(
+        "Limpeza de Fundo (Mata-Borrão)", 100, 255, 220, 
+        help="Abaixe para recuperar sombras muito claras, aumente para limpar a sujeira do papel."
     )
     
-    # NOVO: Filtro de Detalhes Internos
-    nivel_detalhes = st.sidebar.slider(
-        "Simplificar (Remover Detalhes)", 0, 100, 0, 
-        help="0 = Mantém todo o pontilhismo. Aumente para apagar traços pequenos e simplificar o estêncil."
+    ajuste_contraste = st.sidebar.slider(
+        "Intensidade da Tinta", 0.5, 3.0, 1.2, 
+        help="Aumente para escurecer as sombras e linhas, diminua para deixar o estêncil mais suave."
     )
 
 # --- MOTOR DE PROCESSAMENTO ---
-def gerar_stencil(img, tipo_ref, cor, sens, esp_silhueta, dist, lim_branco, esp_linha, nivel_det, t1, t2, t3):
+def gerar_stencil(img, tipo_ref, cor, sens, esp_silhueta, dist, lim_branco, contraste, t1, t2, t3):
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
     h, w = gray.shape
     
     if "Fotografia" in tipo_ref:
-        # MOTOR 1: FOTOGRAFIA (Canny + Sombras + Hierarquia)
+        # MOTOR 1: FOTOGRAFIA (Mapeamento Matemático de Bordas)
         blur_major = cv2.GaussianBlur(gray, (5, 5), 0)
         major_edges = cv2.Canny(blur_major, sens * 1.5, sens * 3)
         
@@ -105,46 +100,42 @@ def gerar_stencil(img, tipo_ref, cor, sens, esp_silhueta, dist, lim_branco, esp_
         
         final_edges = cv2.bitwise_or(combined_solid, dashed_shadows)
         
+        output_rgb = np.full((h, w, 3), 255, dtype=np.uint8)
+        if "Roxo" in cor:
+            output_rgb[final_edges > 0] = [138, 43, 226]
+        else:
+            output_rgb[final_edges > 0] = [0, 0, 0]
+            
+        return output_rgb
+        
     else:
-        # MOTOR 2: EXTRATOR DE TINTA COM FILTRO INTELIGENTE
-        _, ink_mask = cv2.threshold(gray, lim_branco, 255, cv2.THRESH_BINARY_INV)
+        # MOTOR 2: TINTURA SUAVE (Preserva 100% da delicadeza do desenho)
         
-        # 1. Filtro de Detalhes Internos (Matar pontilhismo/traços curtos)
-        if nivel_det > 0:
-            # Analisa blocos de tinta conectados
-            num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(ink_mask, connectivity=8)
-            filtered_mask = np.zeros_like(ink_mask)
-            
-            # Mapeia o valor de 1-100 do slider para tamanho de área em pixels (0 a 200)
-            min_area = nivel_det * 2 
-            
-            for i in range(1, num_labels):
-                if stats[i, cv2.CC_STAT_AREA] >= min_area:
-                    filtered_mask[labels == i] = 255
-            ink_mask = filtered_mask
-                
-        # 2. Controle Dinâmico de Espessura
-        if esp_linha == 1: # Mais fino que o original
-            kernel_thin = np.ones((2, 2), np.uint8)
-            ink_mask = cv2.erode(ink_mask, kernel_thin, iterations=1)
-        elif esp_linha == 3: # Mais grosso
-            kernel_thick = np.ones((2, 2), np.uint8)
-            ink_mask = cv2.dilate(ink_mask, kernel_thick, iterations=1)
-        elif esp_linha == 4: # Muito Grosso
-            kernel_thick = np.ones((3, 3), np.uint8)
-            ink_mask = cv2.dilate(ink_mask, kernel_thick, iterations=1)
-        # Se esp_linha == 2, mantém o traço original perfeitamente.
-            
-        final_edges = ink_mask
+        # 1. Limpa o fundo sem destruir os cinzas
+        _, gray_trunc = cv2.threshold(gray, lim_branco, 255, cv2.THRESH_TRUNC)
+        gray_norm = cv2.normalize(gray_trunc, None, 0, 255, cv2.NORM_MINMAX)
         
-    # Mapeamento de Cor
-    output_rgb = np.full((h, w, 3), 255, dtype=np.uint8)
-    if "Roxo" in cor:
-        output_rgb[final_edges > 0] = [138, 43, 226] 
-    else:
-        output_rgb[final_edges > 0] = [0, 0, 0] 
+        # 2. Converte para float (0.0 a 1.0) para fazer a mesclagem perfeita
+        gray_float = gray_norm.astype(np.float32) / 255.0
         
-    return output_rgb
+        # 3. Aplica o contraste para não deixar o desenho apagado demais
+        gray_float = np.power(gray_float, contraste)
+        
+        # 4. Mapeamento de cores
+        if "Roxo" in cor:
+            tinta = np.array([138, 43, 226], dtype=np.float32) # RGB
+        else:
+            tinta = np.array([0, 0, 0], dtype=np.float32)
+            
+        fundo_branco = np.array([255, 255, 255], dtype=np.float32)
+        
+        # Estica a matriz de cinza para 3 canais (RGB)
+        gray_3d = np.stack([gray_float]*3, axis=-1)
+        
+        # Mesclagem: Quanto mais escuro o cinza, mais 'tinta' aplica.
+        blended = (gray_3d * fundo_branco) + ((1.0 - gray_3d) * tinta)
+        
+        return np.clip(blended, 0, 255).astype(np.uint8)
 
 # --- INTERFACE FLUXO DO USUÁRIO ---
 tab1, tab2 = st.tabs(["📷 Câmera", "📂 Galeria"])
@@ -167,7 +158,7 @@ if imagem_subida is not None:
     resultado = gerar_stencil(
         img_opencv, tipo_referencia, cor_stencil, 
         sensibilidade_contorno, espessura_silhueta, distancia_sombras, 
-        limite_branco, espessura_linha_unica, nivel_detalhes, t1, t2, t3
+        limite_branco, ajuste_contraste, t1, t2, t3
     )
     
     img_display_orig = cv2.cvtColor(img_opencv, cv2.COLOR_BGR2RGB)

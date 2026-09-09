@@ -8,13 +8,13 @@ import io
 st.set_page_config(page_title="Stencil Pro - Studio", page_icon="🖊️", layout="wide")
 
 st.title("🖊️ Stencil Técnico: Realismo & Flash Art")
-st.write("Modo 1: Fotografia Realista | Modo 2: Desenho/Flash (Tons Suaves e Delicados).")
+st.write("Modo 1: Fotografia Realista | Modo 2: Desenho/Flash (Traços 100% Sólidos e Nítidos).")
 
 # --- BARRA LATERAL (AJUSTES PRINCIPAIS) ---
 st.sidebar.header("🎯 Tipo de Referência")
 tipo_referencia = st.sidebar.radio(
     "O que você está convertendo?", 
-    ["1. Fotografia (Realismo / Rostos)", "2. Desenho / Flash (Sombras Delicadas)"]
+    ["1. Fotografia (Realismo / Rostos)", "2. Desenho / Flash (Linhas Sólidas)"]
 )
 
 st.sidebar.header("🎨 Cor da Linha")
@@ -24,8 +24,8 @@ cor_stencil = st.sidebar.radio("Escolha a cor para impressão:", ["Roxo Hectogr�
 sensibilidade_contorno = 40
 espessura_silhueta = 2
 distancia_sombras = 5
-limite_branco = 200
-ajuste_contraste = 1.0
+limite_branco = 180
+espessura_linha = 2
 t1, t2, t3 = 45, 100, 175
 
 # --- CONTROLES DINÂMICOS ---
@@ -42,25 +42,25 @@ if "Fotografia" in tipo_referencia:
         t3 = st.slider("Zona 3: Tons Claros (Transições)", 151, 230, 175)
 else:
     st.sidebar.header("🛠️ Controles de Desenho")
-    st.sidebar.info("Modo Translúcido: Preserva perfeitamente a delicadeza de hachuras, pontilhismos e sombras originais.")
+    st.sidebar.info("Modo Traço Sólido: Elimina manchas translúcidas e converte todos os detalhes em linhas sólidas 100% (ideal para impressora térmica).")
     
     limite_branco = st.sidebar.slider(
-        "Limpeza de Fundo (Mata-Borrão)", 100, 255, 220, 
-        help="Abaixe para recuperar sombras muito claras, aumente para limpar a sujeira do papel."
+        "Corte de Sombras (Threshold)", 50, 250, 180, 
+        help="Aumente para transformar sombras claras em linhas. Diminua para limpar o fundo."
     )
     
-    ajuste_contraste = st.sidebar.slider(
-        "Intensidade da Tinta", 0.5, 3.0, 1.2, 
-        help="Aumente para escurecer as sombras e linhas, diminua para deixar o estêncil mais suave."
+    espessura_linha = st.sidebar.slider(
+        "Espessura do Traço", 1, 3, 2,
+        help="1 = Afinar traços, 2 = Original, 3 = Engrossar traços."
     )
 
 # --- MOTOR DE PROCESSAMENTO ---
-def gerar_stencil(img, tipo_ref, cor, sens, esp_silhueta, dist, lim_branco, contraste, t1, t2, t3):
+def gerar_stencil(img, tipo_ref, cor, sens, esp_silhueta, dist, lim_branco, esp_linha, t1, t2, t3):
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
     h, w = gray.shape
     
     if "Fotografia" in tipo_ref:
-        # MOTOR 1: FOTOGRAFIA (Mapeamento Matemático de Bordas)
+        # MOTOR 1: FOTOGRAFIA
         blur_major = cv2.GaussianBlur(gray, (5, 5), 0)
         major_edges = cv2.Canny(blur_major, sens * 1.5, sens * 3)
         
@@ -79,7 +79,6 @@ def gerar_stencil(img, tipo_ref, cor, sens, esp_silhueta, dist, lim_branco, cont
         
         combined_solid = cv2.bitwise_or(major_edges_bold, detail_edges)
         
-        # Sombras
         blurred_shadows = cv2.GaussianBlur(gray, (7, 7), 0)
         mask1 = (blurred_shadows < t1).astype(np.uint8) * 255
         mask2 = (blurred_shadows < t2).astype(np.uint8) * 255
@@ -100,42 +99,34 @@ def gerar_stencil(img, tipo_ref, cor, sens, esp_silhueta, dist, lim_branco, cont
         
         final_edges = cv2.bitwise_or(combined_solid, dashed_shadows)
         
-        output_rgb = np.full((h, w, 3), 255, dtype=np.uint8)
-        if "Roxo" in cor:
-            output_rgb[final_edges > 0] = [138, 43, 226]
-        else:
-            output_rgb[final_edges > 0] = [0, 0, 0]
-            
-        return output_rgb
-        
     else:
-        # MOTOR 2: TINTURA SUAVE (Preserva 100% da delicadeza do desenho)
+        # MOTOR 2: TRAÇO SÓLIDO E NÍTIDO (Sem Manchas)
         
-        # 1. Limpa o fundo sem destruir os cinzas
-        _, gray_trunc = cv2.threshold(gray, lim_branco, 255, cv2.THRESH_TRUNC)
-        gray_norm = cv2.normalize(gray_trunc, None, 0, 255, cv2.NORM_MINMAX)
+        # 1. Máscara de Nitidez (Sharpening): Faz as hachuras e pontos saltarem do papel
+        blur = cv2.GaussianBlur(gray, (0, 0), 2.0)
+        gray_sharp = cv2.addWeighted(gray, 1.7, blur, -0.7, 0)
         
-        # 2. Converte para float (0.0 a 1.0) para fazer a mesclagem perfeita
-        gray_float = gray_norm.astype(np.float32) / 255.0
+        # 2. Binarização Absoluta: Transforma tudo em 100% tinta ou 100% fundo branco
+        _, ink_mask = cv2.threshold(gray_sharp, lim_branco, 255, cv2.THRESH_BINARY_INV)
         
-        # 3. Aplica o contraste para não deixar o desenho apagado demais
-        gray_float = np.power(gray_float, contraste)
-        
-        # 4. Mapeamento de cores
-        if "Roxo" in cor:
-            tinta = np.array([138, 43, 226], dtype=np.float32) # RGB
-        else:
-            tinta = np.array([0, 0, 0], dtype=np.float32)
+        # 3. Controle de Espessura
+        if esp_linha == 1:
+            kernel = np.ones((2, 2), np.uint8)
+            ink_mask = cv2.erode(ink_mask, kernel, iterations=1)
+        elif esp_linha == 3:
+            kernel = np.ones((2, 2), np.uint8)
+            ink_mask = cv2.dilate(ink_mask, kernel, iterations=1)
             
-        fundo_branco = np.array([255, 255, 255], dtype=np.float32)
+        final_edges = ink_mask
         
-        # Estica a matriz de cinza para 3 canais (RGB)
-        gray_3d = np.stack([gray_float]*3, axis=-1)
+    # --- MAPEAMENTO DE COR SÓLIDA ---
+    output_rgb = np.full((h, w, 3), 255, dtype=np.uint8)
+    if "Roxo" in cor:
+        output_rgb[final_edges > 0] = [138, 43, 226] # Roxo 100% opaco
+    else:
+        output_rgb[final_edges > 0] = [0, 0, 0] # Preto 100% opaco
         
-        # Mesclagem: Quanto mais escuro o cinza, mais 'tinta' aplica.
-        blended = (gray_3d * fundo_branco) + ((1.0 - gray_3d) * tinta)
-        
-        return np.clip(blended, 0, 255).astype(np.uint8)
+    return output_rgb
 
 # --- INTERFACE FLUXO DO USUÁRIO ---
 tab1, tab2 = st.tabs(["📷 Câmera", "📂 Galeria"])
@@ -158,7 +149,7 @@ if imagem_subida is not None:
     resultado = gerar_stencil(
         img_opencv, tipo_referencia, cor_stencil, 
         sensibilidade_contorno, espessura_silhueta, distancia_sombras, 
-        limite_branco, ajuste_contraste, t1, t2, t3
+        limite_branco, espessura_linha, t1, t2, t3
     )
     
     img_display_orig = cv2.cvtColor(img_opencv, cv2.COLOR_BGR2RGB)

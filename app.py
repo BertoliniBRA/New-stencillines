@@ -5,27 +5,28 @@ from PIL import Image
 import io
 
 # --- CONFIGURAÇÃO DA PÁGINA ---
-st.set_page_config(page_title="Stencil Pro - Clean Flash", page_icon="🖊️", layout="wide")
+st.set_page_config(page_title="Stencil Pro - Studio", page_icon="🖊️", layout="wide")
 
-st.title("🖊️ Stencil Técnico: Realismo & Linha Única Limpa")
-st.write("Modo 1: Fotografia Realista | Modo 2: Desenho/Flash com Fundo Limpo e Traço Único.")
+st.title("🖊️ Stencil Técnico: Realismo & Flash Art")
+st.write("Modo 1: Fotografia Realista | Modo 2: Flash Art (Com Filtro de Detalhes e Espessura).")
 
 # --- BARRA LATERAL (AJUSTES PRINCIPAIS) ---
 st.sidebar.header("🎯 Tipo de Referência")
 tipo_referencia = st.sidebar.radio(
     "O que você está convertendo?", 
-    ["1. Fotografia (Realismo / Rostos)", "2. Desenho / Flash (Linha Única Limpa)"]
+    ["1. Fotografia (Realismo / Rostos)", "2. Desenho / Flash (Controle Total)"]
 )
 
 st.sidebar.header("🎨 Cor da Linha")
-cor_stencil = st.sidebar.radio("Escolha a cor para impressão:", ["Roxo", "Preto"])
+cor_stencil = st.sidebar.radio("Escolha a cor para impressão:", ["Roxo Hectográfico", "Preto"])
 
 # Variáveis globais seguras
 sensibilidade_contorno = 40
 espessura_silhueta = 2
 distancia_sombras = 5
-limite_branco = 200
-espessura_linha_unica = 1
+limite_branco = 180
+espessura_linha_unica = 2
+nivel_detalhes = 0
 t1, t2, t3 = 45, 100, 175
 
 # --- CONTROLES DINÂMICOS ---
@@ -42,12 +43,24 @@ if "Fotografia" in tipo_referencia:
         t3 = st.slider("Zona 3: Tons Claros (Transições)", 151, 230, 175)
 else:
     st.sidebar.header("🛠️ Controles de Desenho")
-    st.sidebar.info("Modo Traço Único: Limpa a sujeira do papel e extrai o esqueleto exato do desenho, sem linhas duplas.")
-    limite_branco = st.sidebar.slider("Limpeza de Fundo (Mata-Borrão)", 100, 255, 200, help="Diminua se o desenho estiver apagando. Aumente para limpar o fundo sujo.")
-    espessura_linha_unica = st.sidebar.slider("Espessura da Linha Única", 1, 4, 1, help="Engrossa o traço extraído para leitura na impressora térmica.")
+    st.sidebar.info("Ajuste a espessura do traço e filtre a quantidade de microdetalhes do desenho.")
+    
+    limite_branco = st.sidebar.slider("Limpeza de Fundo", 50, 250, 180, help="Tudo mais claro que esse valor vira fundo branco.")
+    
+    # NOVO: Controle de Espessura Flexível
+    espessura_linha_unica = st.sidebar.slider(
+        "Espessura do Traço", 1, 4, 2, 
+        help="1 = Mais Fino (Erosão), 2 = Traço Original, 3 = Grosso, 4 = Muito Grosso."
+    )
+    
+    # NOVO: Filtro de Detalhes Internos
+    nivel_detalhes = st.sidebar.slider(
+        "Simplificar (Remover Detalhes)", 0, 100, 0, 
+        help="0 = Mantém todo o pontilhismo. Aumente para apagar traços pequenos e simplificar o estêncil."
+    )
 
 # --- MOTOR DE PROCESSAMENTO ---
-def gerar_stencil(img, tipo_ref, cor, sens, esp_silhueta, dist, lim_branco, esp_linha, t1, t2, t3):
+def gerar_stencil(img, tipo_ref, cor, sens, esp_silhueta, dist, lim_branco, esp_linha, nivel_det, t1, t2, t3):
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
     h, w = gray.shape
     
@@ -93,42 +106,43 @@ def gerar_stencil(img, tipo_ref, cor, sens, esp_silhueta, dist, lim_branco, esp_
         final_edges = cv2.bitwise_or(combined_solid, dashed_shadows)
         
     else:
-        # MOTOR 2: DESENHO MINIMALISTA (Limpeza + Esqueletização / Traço Único)
-        # 1. Limpeza de Fundo (Mata-Borrão)
-        _, gray_clean = cv2.threshold(gray, lim_branco, 255, cv2.THRESH_TRUNC)
-        gray_clean = cv2.normalize(gray_clean, None, 0, 255, cv2.NORM_MINMAX)
+        # MOTOR 2: EXTRATOR DE TINTA COM FILTRO INTELIGENTE
+        _, ink_mask = cv2.threshold(gray, lim_branco, 255, cv2.THRESH_BINARY_INV)
         
-        # 2. Binarização adaptativa para isolar o traço
-        blur = cv2.GaussianBlur(gray_clean, (3, 3), 0)
-        bin_img = cv2.adaptiveThreshold(blur, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY_INV, 11, 4)
-        
-        # 3. Esqueletização (Afina até o traço único de 1 pixel)
-        skel = np.zeros(bin_img.shape, np.uint8)
-        element = cv2.getStructuringElement(cv2.MORPH_CROSS, (3,3))
-        temp_img = bin_img.copy()
-        
-        while True:
-            eroded = cv2.erode(temp_img, element)
-            temp = cv2.dilate(eroded, element)
-            sub = cv2.subtract(temp_img, temp)
-            skel = cv2.bitwise_or(skel, sub)
-            temp_img = eroded.copy()
-            if cv2.countNonZero(temp_img) == 0:
-                break
-                
-        # 4. Aplica a espessura no traço único, se solicitado
-        if esp_linha > 1:
-            kernel_min = np.ones((esp_linha, esp_linha), np.uint8)
-            skel = cv2.dilate(skel, kernel_min, iterations=1)
+        # 1. Filtro de Detalhes Internos (Matar pontilhismo/traços curtos)
+        if nivel_det > 0:
+            # Analisa blocos de tinta conectados
+            num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(ink_mask, connectivity=8)
+            filtered_mask = np.zeros_like(ink_mask)
             
-        final_edges = skel
+            # Mapeia o valor de 1-100 do slider para tamanho de área em pixels (0 a 200)
+            min_area = nivel_det * 2 
+            
+            for i in range(1, num_labels):
+                if stats[i, cv2.CC_STAT_AREA] >= min_area:
+                    filtered_mask[labels == i] = 255
+            ink_mask = filtered_mask
+                
+        # 2. Controle Dinâmico de Espessura
+        if esp_linha == 1: # Mais fino que o original
+            kernel_thin = np.ones((2, 2), np.uint8)
+            ink_mask = cv2.erode(ink_mask, kernel_thin, iterations=1)
+        elif esp_linha == 3: # Mais grosso
+            kernel_thick = np.ones((2, 2), np.uint8)
+            ink_mask = cv2.dilate(ink_mask, kernel_thick, iterations=1)
+        elif esp_linha == 4: # Muito Grosso
+            kernel_thick = np.ones((3, 3), np.uint8)
+            ink_mask = cv2.dilate(ink_mask, kernel_thick, iterations=1)
+        # Se esp_linha == 2, mantém o traço original perfeitamente.
+            
+        final_edges = ink_mask
         
     # Mapeamento de Cor
     output_rgb = np.full((h, w, 3), 255, dtype=np.uint8)
-    if cor == "Roxo":
-        output_rgb[final_edges > 0] = [138, 43, 226] # Roxo Hectográfico
+    if "Roxo" in cor:
+        output_rgb[final_edges > 0] = [138, 43, 226] 
     else:
-        output_rgb[final_edges > 0] = [0, 0, 0] # Preto
+        output_rgb[final_edges > 0] = [0, 0, 0] 
         
     return output_rgb
 
@@ -153,7 +167,7 @@ if imagem_subida is not None:
     resultado = gerar_stencil(
         img_opencv, tipo_referencia, cor_stencil, 
         sensibilidade_contorno, espessura_silhueta, distancia_sombras, 
-        limite_branco, espessura_linha_unica, t1, t2, t3
+        limite_branco, espessura_linha_unica, nivel_detalhes, t1, t2, t3
     )
     
     img_display_orig = cv2.cvtColor(img_opencv, cv2.COLOR_BGR2RGB)
@@ -171,8 +185,8 @@ if imagem_subida is not None:
     
     st.success("Estêncil gerado com sucesso!")
     st.download_button(
-        label=f"⬇️ Baixar Estêncil {cor_stencil}",
+        label=f"⬇️ Baixar Estêncil",
         data=io_buf,
-        file_name=f"stencil_{cor_stencil.lower()}.jpg",
+        file_name=f"stencil_studio.jpg",
         mime="image/jpeg"
     )
